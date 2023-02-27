@@ -1,52 +1,121 @@
-import os
+from os import path
+from typing import Optional
+
 import torch
-from torch import nn
-import torch.nn.functional as F
-from torchvision.datasets import MNIST
+from torch.nn import functional as F
 from torch.utils.data import DataLoader, random_split
-from pytorch_lightning.strategies import DDPStrategy
 
-from torchvision import transforms
-import pytorch_lightning as pl
+from lightning.pytorch import cli_lightning_logo, LightningDataModule, LightningModule
+from lightning.pytorch.cli import LightningCLI
+from lightning.pytorch.demos.mnist_datamodule import MNIST
+from lightning.pytorch.utilities.imports import _TORCHVISION_AVAILABLE
+
+if _TORCHVISION_AVAILABLE:
+    from torchvision import transforms
+
+DATASETS_PATH = path.join(path.dirname(__file__), "..", "..", "Datasets")
 
 
-class LitAutoEncoder(pl.LightningModule):
+class Backbone(torch.nn.Module):
+    """
+    >>> Backbone()  # doctest: +ELLIPSIS +NORMALIZE_WHITESPACE
+    Backbone(
+      (l1): Linear(...)
+      (l2): Linear(...)
+    )
+    """
 
-    def __init__(self):
+    def __init__(self, hidden_dim=128):
         super().__init__()
-        self.encoder = nn.Sequential(nn.Linear(28 * 28, 128), nn.ReLU(), nn.Linear(128, 3))
-        self.decoder = nn.Sequential(nn.Linear(3, 128), nn.ReLU(), nn.Linear(128, 28 * 28))
-    
+        self.l1 = torch.nn.Linear(28 * 28, hidden_dim)
+        self.l2 = torch.nn.Linear(hidden_dim, 10)
+
     def forward(self, x):
-        # in lightning, forward defines the prediction/inference actions
-        embedding = self.encoder(x)
+        x = x.view(x.size(0), -1)
+        x = torch.relu(self.l1(x))
+        x = torch.relu(self.l2(x))
+        return x
+
+
+class LitClassifier(LightningModule):
+    """
+    >>> LitClassifier(Backbone())  # doctest: +ELLIPSIS +NORMALIZE_WHITESPACE
+    LitClassifier(
+      (backbone): ...
+    )
+    """
+
+    def __init__(self, backbone: Optional[Backbone] = None, learning_rate: float = 0.0001):
+        super().__init__()
+        self.save_hyperparameters(ignore=["backbone"])
+        if backbone is None:
+            backbone = Backbone()
+        self.backbone = backbone
+
+    def forward(self, x):
+        # use forward for inference/predictions
+        embedding = self.backbone(x)
         return embedding
 
     def training_step(self, batch, batch_idx):
-        # training_step defined the train loop. It is independent of forward
         x, y = batch
-        x = x.view(x.size(0), -1)
-        z = self.encoder(x)
-        x_hat = self.decoder(z)
-        loss = F.mse_loss(x_hat, x)
+        y_hat = self(x)
+        loss = F.cross_entropy(y_hat, y)
+        self.log("train_loss", loss, on_epoch=True)
         return loss
 
+    def validation_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        loss = F.cross_entropy(y_hat, y)
+        self.log("valid_loss", loss, on_step=True)
+
+    def test_step(self, batch, batch_idx):
+        x, y = batch
+        y_hat = self(x)
+        loss = F.cross_entropy(y_hat, y)
+        self.log("test_loss", loss)
+
+    def predict_step(self, batch, batch_idx, dataloader_idx=None):
+        x, y = batch
+        return self(x)
+
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
-        return optimizer
+        # self.hparams available because we called self.save_hyperparameters()
+        return torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
 
 
-def train():
-    dataset = MNIST(os.getcwd(), download=True, transform=transforms.ToTensor())
-    train, val = random_split(dataset, [55000, 5000])
+class MyDataModule(LightningDataModule):
+    def __init__(self, batch_size: int = 32):
+        super().__init__()
+        dataset = MNIST(DATASETS_PATH, train=True, download=True, transform=transforms.ToTensor())
+        self.mnist_test = MNIST(DATASETS_PATH, train=False, download=True, transform=transforms.ToTensor())
+        self.mnist_train, self.mnist_val = random_split(dataset, [55000, 5000])
+        self.batch_size = batch_size
 
-    autoencoder = LitAutoEncoder()
-    ddp = DDPStrategy(process_group_backend="nccl")
+    def train_dataloader(self):
+        return DataLoader(self.mnist_train, batch_size=self.batch_size)
 
-    trainer = pl.Trainer(strategy=ddp, accelerator="gpu", devices=1, num_nodes=3)
-    trainer.fit(autoencoder, DataLoader(train), DataLoader(val))
-    
+    def val_dataloader(self):
+        return DataLoader(self.mnist_val, batch_size=self.batch_size)
+
+    def test_dataloader(self):
+        return DataLoader(self.mnist_test, batch_size=self.batch_size)
+
+    def predict_dataloader(self):
+        return DataLoader(self.mnist_test, batch_size=self.batch_size)
 
 
-if __name__ == '__main__':
-    train()
+def cli_main():
+    cli = LightningCLI(
+        LitClassifier, MyDataModule, seed_everything_default=1234, save_config_kwargs={"overwrite": True}, run=False
+    )
+    cli.trainer.fit(cli.model, datamodule=cli.datamodule)
+    cli.trainer.test(ckpt_path="best", datamodule=cli.datamodule)
+    predictions = cli.trainer.predict(ckpt_path="best", datamodule=cli.datamodule)
+    print(predictions[0])
+
+
+if __name__ == "__main__":
+    cli_lightning_logo()
+    cli_main()
