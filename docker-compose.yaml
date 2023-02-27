@@ -9,6 +9,8 @@ services:
     environment:
       - LC_ALL=C.UTF-8
       - LANG=C.UTF-8
+    ports:
+      - 23456:23456
     volumes:
       - .:/pytorch-distributed-training-k8s
     working_dir: /pytorch-distributed-training-k8s
