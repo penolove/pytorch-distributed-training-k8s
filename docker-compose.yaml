@@ -1,0 +1,12 @@
+version: '2.3'
+services:
+  gpu-training:
+    user: root
+    image: pytorchlightning/pytorch_lightning:base-cuda-py3.8-torch1.12-cuda11.3.1
+    environment:
+      - LC_ALL=C.UTF-8
+      - LANG=C.UTF-8
+    volumes:
+      - .:/pytorch-distributed-training-k8s
+    working_dir: /pytorch-distributed-training-k8s
+    command: tail -f /dev/null
