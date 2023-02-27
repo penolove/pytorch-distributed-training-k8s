@@ -4,7 +4,7 @@ services:
     user: root
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
     shm_size: '8gb'
     environment:
       - LC_ALL=C.UTF-8
