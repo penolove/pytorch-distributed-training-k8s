@@ -4,6 +4,8 @@ from torch import nn
 import torch.nn.functional as F
 from torchvision.datasets import MNIST
 from torch.utils.data import DataLoader, random_split
+from pytorch_lightning.strategies import DDPStrategy
+
 from torchvision import transforms
 import pytorch_lightning as pl
 
@@ -39,7 +41,9 @@ def train():
     train, val = random_split(dataset, [55000, 5000])
 
     autoencoder = LitAutoEncoder()
-    trainer = pl.Trainer(max_epochs=1, gpus=2)
+    ddp = DDPStrategy(process_group_backend="nccl")
+
+    trainer = pl.Trainer(strategy=ddp, accelerator="gpu", devices=1, num_nodes=3)
     trainer.fit(autoencoder, DataLoader(train), DataLoader(val))
     
 
